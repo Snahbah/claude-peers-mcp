@@ -60,6 +60,13 @@ export interface SendMessageRequest {
 
 export interface PollMessagesRequest {
   id: PeerId;
+  /**
+   * When true, return undelivered messages WITHOUT marking them delivered.
+   * Used by the background push loop so a message is only "consumed" by an
+   * explicit check_messages, never lost to a one-shot channel push that failed
+   * to surface. Omitted/false = the consuming path (marks delivered).
+   */
+  peek?: boolean;
 }
 
 export interface PollMessagesResponse {

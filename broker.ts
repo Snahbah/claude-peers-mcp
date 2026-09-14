@@ -154,7 +154,9 @@ function handleHeartbeat(body: HeartbeatRequest): void {
 }
 
 function handleSetSummary(body: SetSummaryRequest): void {
-  updateSummary.run(body.summary, body.id);
+  // Coalesce a missing/undefined summary to '' — the column is NOT NULL, and a
+  // malformed client (wrong field name) must not 500 the whole endpoint.
+  updateSummary.run(body.summary ?? "", body.id);
 }
 
 function handleListPeers(body: ListPeersRequest): Peer[] {
@@ -211,9 +213,13 @@ function handleSendMessage(body: SendMessageRequest): { ok: boolean; error?: str
 function handlePollMessages(body: PollMessagesRequest): PollMessagesResponse {
   const messages = selectUndelivered.all(body.id) as Message[];
 
-  // Mark them as delivered
-  for (const msg of messages) {
-    markDelivered.run(msg.id);
+  // peek = the background push loop looking without consuming. Only an explicit
+  // check_messages (peek falsy) marks messages delivered, so a message is never
+  // lost to a one-shot channel push that failed to surface in the session.
+  if (!body.peek) {
+    for (const msg of messages) {
+      markDelivered.run(msg.id);
+    }
   }
 
   return { messages };

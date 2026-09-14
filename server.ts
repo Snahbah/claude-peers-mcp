@@ -31,6 +31,7 @@ import {
   getGitBranch,
   getRecentFiles,
 } from "./shared/summarize.ts";
+import { fileURLToPath } from "node:url";
 
 // --- Configuration ---
 
@@ -38,7 +39,9 @@ const BROKER_PORT = parseInt(process.env.CLAUDE_PEERS_PORT ?? "7899", 10);
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
 const POLL_INTERVAL_MS = 1000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
-const BROKER_SCRIPT = new URL("./broker.ts", import.meta.url).pathname;
+// fileURLToPath (not URL.pathname) so Windows gets `C:\…` not `/C:/…`, which
+// Bun.spawn cannot resolve. broker.ts sits beside this file.
+const BROKER_SCRIPT = fileURLToPath(new URL("./broker.ts", import.meta.url));
 
 // --- Broker communication ---
 
@@ -138,6 +141,11 @@ function getTty(): string | null {
 let myId: PeerId | null = null;
 let myCwd = process.cwd();
 let myGitRoot: string | null = null;
+// Message ids already pushed to the channel by the background loop. The loop
+// peeks (does not consume), so this in-memory set is what stops the same message
+// re-pushing every second. Cleared on restart (a one-time re-push is harmless);
+// the authoritative consume is check_messages, which still marks delivered.
+const pushedIds = new Set<number>();
 
 // --- MCP Server ---
 
@@ -405,9 +413,18 @@ async function pollAndPushMessages() {
   if (!myId) return;
 
   try {
-    const result = await brokerFetch<PollMessagesResponse>("/poll-messages", { id: myId });
+    // peek: fetch without consuming, so a push that fails to surface in the
+    // session is still retrievable via check_messages. Dedupe with pushedIds so
+    // we don't re-push the same (still-undelivered) message every second.
+    const result = await brokerFetch<PollMessagesResponse>("/poll-messages", {
+      id: myId,
+      peek: true,
+    });
 
     for (const msg of result.messages) {
+      if (pushedIds.has(msg.id)) continue;
+      pushedIds.add(msg.id);
+
       // Look up the sender's info for context
       let fromSummary = "";
       let fromCwd = "";
